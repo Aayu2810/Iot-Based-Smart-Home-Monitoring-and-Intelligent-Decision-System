@@ -24,8 +24,8 @@
 #define BLUE_LED_PIN 14
 
 // --- WiFi Credentials & Server Targets ---
-#define WIFI_SSID "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID "Oppo"
+#define WIFI_PASSWORD "00000000"
 #define WIFI_TIMEOUT_MS 10000
 
 #define THINGSPEAK_SERVER "api.thingspeak.com"
@@ -33,7 +33,7 @@
 #define THINGSPEAK_CHANNEL_ID 000000          // Replace with actual channel ID
 #define THINGSPEAK_WRITE_API_KEY "YOUR_KEY_HERE"
 
-#define MQTT_BROKER_IP "192.168.1.100"
+#define MQTT_BROKER_IP "172.18.163.168"
 #define MQTT_PORT 1883
 #define MQTT_CLIENT_ID "SmartHome_ESP32"
 #define MQTT_MAX_RETRIES 3
