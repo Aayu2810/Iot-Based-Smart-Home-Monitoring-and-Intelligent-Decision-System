@@ -1,3 +1,4 @@
+
 # 🏠 Smart Home Monitoring System — Complete Circuit Connection Reference
 
 > **Project:** Smart Home IoT Cognitive Backplane  
@@ -8,35 +9,8 @@
 
 ## 1. System Architecture Overview
 
-```text
-┌─────────────────────────────────────────────────────────────────────┐
-│                     LOCAL AREA NETWORK (Wi‑Fi)                       │
-│  SSID: YOUR_WIFI_SSID   |   Subnet: 192.168.1.0/24                  │
-│                                                                       │
-│  ┌──────────────────┐                    ┌──────────────────────┐    │
-│  │   ESP32 #1       │                    │   Raspberry Pi        │    │
-│  │  (Env Sensor)    │   MQTT (TCP 1883)  │  (Edge Coordinator)   │    │
-│  │  IP: 192.168.1.50│◄──────────────────►│  IP: 192.168.1.100   │    │
-│  │  MQ2 + DHT11     │                    │  - MQTT Broker       │    │
-│  └──────────────────┘                    │  - Data Aggregation  │    │
-│                                         │  - FSM Engine        │    │
-│  ┌──────────────────┐                    │  - Graph Algorithms │    │
-│  │   ESP32 #2       │   MQTT (TCP 1883)  │  - ThingSpeak Uploader│   │
-│  │  (Motion Sensor)  │◄──────────────────►│  - Anomaly Detection│    │
-│  │  IP: 192.168.1.51 │                    └──────────────────────┘    │
-│  │  PIR + Buzzer     │                            │                 │
-│  └──────────────────┘                            │ HTTPS (443)     │
-│                                                 ▼                    │
-│  ┌──────────────────┐                 ┌─────────────────────┐       │
-│  │   ESP32 #3       │                 │   ThingSpeak Cloud   │       │
-│  │  (Light Sensor)  │   MQTT (TCP 1883)│  api.thingspeak.com  │       │
-│  │  IP: 192.168.1.52│◄────────────────►│  Port: 443 (TLS/SSL) │       │
-│  │  LDR + LEDs      │                 └─────────────────────┘       │
-│  └──────────────────┘                                                 │
-└─────────────────────────────────────────────────────────────────────┘
-```
+<img width="1024" height="559" alt="a579c03b-e7f5-495f-b603-1f536c4d8e46" src="https://github.com/user-attachments/assets/82cacd1e-5992-4c10-92b5-5daa7c1bb2c8" />
 
----
 
 ## 2. Component Inventory
 
@@ -110,5 +84,4 @@ Refer to the original `CIRCUIT_CONNECTIONS.md` section 7 for the full MQTT top
 
 ---
 
-*Generated and updated to match the new three‑node architecture.*
 
