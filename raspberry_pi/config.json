@@ -1,0 +1,44 @@
+{
+  "broker": {
+    "host": "localhost",
+    "port": 1883,
+    "topics": [
+      "home/sensors/raw",
+      "home/sensors/normalized",
+      "home/fsm/state",
+      "home/alerts/critical",
+      "home/graph/weights",
+      "home/evacuation/path",
+      "home/performance/report"
+    ]
+  },
+  "thingspeak": {
+    "channel_id": 0,
+    "read_api_key": "YOUR_READ_KEY",
+    "write_api_key": "YOUR_WRITE_KEY"
+  },
+  "dataset": {
+    "output_directory": "./smarthome_data/datasets/",
+    "filename_prefix": "smarthome_telemetry",
+    "rotation_hours": 24
+  },
+  "anomaly": {
+    "z_score_threshold": 2.5,
+    "rate_threshold": 0.15,
+    "window_size": 60
+  },
+  "feedback": {
+    "esp32_ip": "192.168.1.50",
+    "esp32_port": 80,
+    "feedback_endpoint": "/feedback"
+  },
+  "logging": {
+    "level": "INFO",
+    "max_file_size_mb": 100,
+    "backup_count": 5
+  },
+  "baseline": {
+    "single_threshold_T": 35.0,
+    "single_threshold_ppm": 500.0
+  }
+}

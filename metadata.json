@@ -1,0 +1,6 @@
+{
+  "name": "Drive Folder AI Study Companion",
+  "description": "Log in to browse Google Drive folders, preview files, and generate study guides or ask questions using Gemini AI.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
