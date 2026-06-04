@@ -54,7 +54,7 @@ class AnomalyDetector:
         self.last_timestamps["temp"] = now
 
         # Perform statistical Z-Score tests
-        if len(self.risk_history) >= 15: // Require minimal statistical density
+        if len(self.risk_history) >= 15:  # Require minimal statistical density
             mean_R = np.mean(self.risk_history)
             std_R = np.std(self.risk_history)
             

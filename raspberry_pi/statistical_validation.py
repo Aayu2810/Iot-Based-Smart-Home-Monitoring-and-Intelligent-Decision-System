@@ -45,7 +45,7 @@ class StatisticalValidation:
         print(" Target Metric Category  | T-Statistic | Def Deg Free | P-Value    | Effect-Size d | Significant ")
         print("-------------------------+-------------+--------------+------------+---------------+-------------")
         for r in results:
-            print(f" {r['Metric']:<23} | {r['T-stat']:11.3f} | {r['DF']:12d} | {r['P-val']:10.6f} | {r['Cohen\'s D']:13.2f} | {r['Sig']:<11}")
+            print(" {:<23} | {:11.3f} | {:12d} | {:10.6f} | {:13.2f} | {:<11}".format(r['Metric'], r['T-stat'], r['DF'], r['P-val'], r["Cohen's D"], r['Sig']))
         print("==================================================================================\n")
         
         self.tests_recorded = results

@@ -47,7 +47,7 @@ Using Bonferroni adjustment (effective limit threshold: 0.00277):
 |:---|:---:|:---:|:---:|:---:|:---:|
 """
         for t in t_tests:
-            md_content += f"| {t['Metric']} | {t['T-stat']:.3f} | {t['DF']} | {t['P-val']:.6f} | {t['Cohen\'s D']:.2f} | {t['Sig']} |\n"
+            md_content += "| {} | {:.3f} | {} | {:.6f} | {:.2f} | {} |\n".format(t['Metric'], t['T-stat'], t['DF'], t['P-val'], t["Cohen's D"], t['Sig'])
 
         md_content += f"""
 ---

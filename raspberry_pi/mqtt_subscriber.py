@@ -112,6 +112,55 @@ class MQTTSubscriber:
         if not self.latencies: return 0.0
         return sum(self.latencies) / len(self.latencies)
 
+    def publish_message(self, topic, payload):
+        """
+        Publish a message to an MQTT topic.
+
+        Args:
+            topic (str): MQTT topic to publish to
+            payload (str or dict): Message payload. Dicts are JSON-serialized.
+
+        Returns:
+            MQTTMessageInfo: Result of the publish operation
+        """
+        try:
+            # JSON serialize dict payloads
+            if isinstance(payload, dict):
+                payload_str = json.dumps(payload)
+            else:
+                payload_str = str(payload)
+
+            # Publish using Paho client
+            result = self.client.publish(topic, payload_str)
+
+            # Log result
+            if result.rc == 0:
+                logger.info(f"Published to {topic}: {payload_str[:100]}")
+            else:
+                logger.error(f"Failed to publish to {topic}. RC: {result.rc}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error publishing message to {topic}: {e}")
+            return None
+
+    def publish(self, topic, payload):
+        """
+        Paho MQTT client compatibility wrapper for publish_message().
+
+        Allows MQTTSubscriber to be used as a drop-in replacement for
+        paho.mqtt.client.Client when publishing is required.
+
+        Args:
+            topic (str): MQTT topic to publish to
+            payload (str or dict): Message payload. Dicts are JSON-serialized.
+
+        Returns:
+            MQTTMessageInfo: Result of the publish operation
+        """
+        return self.publish_message(topic, payload)
+
     def start(self):
         self.client.connect_async(self.host, self.port)
         self.client.loop_start()

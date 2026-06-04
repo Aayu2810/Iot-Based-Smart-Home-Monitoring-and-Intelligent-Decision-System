@@ -53,6 +53,9 @@ def handle_sigint(signum, frame):
 
 signal.signal(signal.SIGINT, handle_sigint)
 
+# Configuration flags for local development
+ENABLE_THINGSPEAK = False
+
 # Global Edge Algorithm Instances
 calibration = SensorCalibration()
 fusion = SensorFusion()
@@ -65,6 +68,55 @@ health_monitor = HealthMonitor()
 perf_logger = PerformanceLogger()
 actuators = ActuatorControl()
 thingspeak = ThingSpeakClient()
+
+# =========================================================================
+# Multi-Node MQTT Sensor Aggregation Architecture
+# =========================================================================
+# Three independent ESP32 MQTT sensor nodes publish to separate topics.
+# This coordinator aggregates their payloads into a unified sensor reading.
+#
+# Node 1 (Environmental): home/node/env/sensors
+#   - temperature, humidity, gas_ppm
+# Node 2 (Motion): home/node/motion/sensors
+#   - pir_state, pir_raw
+# Node 3 (Light): home/node/light/sensors
+#   - ldr_state
+#
+# The aggregation function combines these into a unified payload for the
+# main processing pipeline (process_sensor_payload).
+# =========================================================================
+
+latest_env = {}      # Environmental sensor state (temperature, humidity, gas_ppm)
+latest_motion = {}   # Motion sensor state (pir_state, pir_raw)
+latest_light = {}    # Light sensor state (ldr_state)
+
+def build_combined_payload():
+    """
+    Aggregate the latest readings from all three sensor nodes into a unified payload.
+
+    This function is called by each node's callback after updating its state.
+    It constructs the combined payload expected by process_sensor_payload().
+
+    Returns:
+        dict: Combined payload with all sensor fields
+    """
+    combined = {
+        # Environmental node mappings
+        "t_raw": latest_env.get("temperature", 25.0),
+        "h_raw": latest_env.get("humidity", 40.0),
+        "mq2_raw": latest_env.get("gas_ppm", 0),
+
+        # Motion node mappings
+        "pir_raw": int(latest_motion.get("pir_state", False)),
+
+        # Light node mappings (convert LDR state to ADC-like range)
+        "ldr_raw": 4095 if latest_light.get("ldr_state", 0) else 0,
+
+        # Sequence number placeholder
+        "seq": 0
+    }
+    return combined
+
 
 def process_sensor_payload(payload_dict, mqtt_client, recorder=None):
     """
@@ -196,14 +248,97 @@ def main():
     viz = GraphVisualizer()
     reporter = ReportGenerator()
 
+    # =========================================================================
+    # Define Callback Functions (Closures)
+    # =========================================================================
+    # Callbacks must be defined here to capture 'sub' and 'recorder' from scope.
+    # They update global state containers and trigger the processing pipeline.
+    # =========================================================================
+
+    def on_env_sensor_received(topic, payload):
+        """
+        Callback handler for environmental sensor node.
+        Updates latest_env and triggers aggregation pipeline.
+        Captures 'sub' and 'recorder' from enclosing main() scope.
+        """
+        global latest_env
+        try:
+            latest_env = payload
+            logger.info(f"Updated environmental state: T={payload.get('temperature')}°C, H={payload.get('humidity')}%")
+
+            # Aggregate and process
+            combined_payload = build_combined_payload()
+            process_sensor_payload(combined_payload, sub, recorder)
+        except Exception as e:
+            logger.error(f"Error processing environmental sensor data: {e}")
+
+    def on_motion_sensor_received(topic, payload):
+        """
+        Callback handler for motion sensor node.
+        Updates latest_motion and triggers aggregation pipeline.
+        Captures 'sub' and 'recorder' from enclosing main() scope.
+        """
+        global latest_motion
+        try:
+            latest_motion = payload
+            logger.info(f"Updated motion state: PIR={payload.get('pir_state')}")
+
+            # Aggregate and process
+            combined_payload = build_combined_payload()
+            process_sensor_payload(combined_payload, sub, recorder)
+        except Exception as e:
+            logger.error(f"Error processing motion sensor data: {e}")
+
+    def on_light_sensor_received(topic, payload):
+        """
+        Callback handler for light sensor node.
+        Updates latest_light and triggers aggregation pipeline.
+        Captures 'sub' and 'recorder' from enclosing main() scope.
+        """
+        global latest_light
+        try:
+            latest_light = payload
+            logger.info(f"Updated light state: LDR={payload.get('ldr_state')}")
+
+            # Aggregate and process
+            combined_payload = build_combined_payload()
+            process_sensor_payload(combined_payload, sub, recorder)
+        except Exception as e:
+            logger.error(f"Error processing light sensor data: {e}")
+
+    def on_any_sensor_update(topic, payload):
+        """
+        Wrapper to feed anomaly detector whenever any sensor updates.
+        Captures 'detector' from enclosing main() scope.
+        """
+        combined_payload = build_combined_payload()
+        detector.feed_data(topic, combined_payload)
+
     # Link Edge Actuator Control to MQTT publish
     actuators.initialize(mqtt_publish_func=sub.publish_message)
 
-    # Link callbacks through delegate observers (Subject: DMS Observer pattern)
-    # Reroute raw sensor topic to the new Edge Pipeline processing function first
-    sub.register_callback("home/sensors/raw", lambda topic, payload: process_sensor_payload(payload, sub, recorder))
-    
-    sub.register_callback("home/sensors/raw", detector.feed_data)
+    # =========================================================================
+    # Multi-Node MQTT Callback Registration
+    # =========================================================================
+    # Register callbacks for the three independent sensor nodes:
+    # - Environmental node (temperature, humidity, gas_ppm)
+    # - Motion node (PIR motion detection)
+    # - Light node (LDR illumination)
+    #
+    # Each callback updates its global state container, then aggregates
+    # all three into a unified payload for the main processing pipeline.
+    # =========================================================================
+
+    sub.register_callback("home/node/env/sensors", on_env_sensor_received)
+    sub.register_callback("home/node/motion/sensors", on_motion_sensor_received)
+    sub.register_callback("home/node/light/sensors", on_light_sensor_received)
+
+    # Also register detector callback to feed anomaly detection
+    # Note: detector expects the combined payload format
+    sub.register_callback("home/node/env/sensors", on_any_sensor_update)
+    sub.register_callback("home/node/motion/sensors", on_any_sensor_update)
+    sub.register_callback("home/node/light/sensors", on_any_sensor_update)
+
     sub.register_callback("home/performance/report", perf.on_performance_received)
 
     # Begin subscriber threads
@@ -269,7 +404,7 @@ def main():
                 print(f"                FSM State: {fsm.get_current_state_name()} | Fused Risk R={fusion.get_risk_score():.3f}")
 
             # 5. Push HTTP metrics up to ThingSpeak (Subject: Networks HTTP rate limiting)
-            if thingspeak.should_upload(5000):
+            if ENABLE_THINGSPEAK and thingspeak.should_upload(5000):
                 # Ensure we have the latest payload data to upload
                 alerts = detector.get_latest_anomalies()
                 is_critical = any(a.get("z_score", 0) > config["anomaly"]["z_score_threshold"] for a in alerts)
@@ -281,7 +416,7 @@ def main():
                 raw = SensorReadings()
                 norm = NormalizedValues()
                 norm.risk_score = fusion.get_risk_score()
-                
+
                 upload_success = thingspeak.upload(raw, norm, fsm.get_current_state(), alert_flags)
                 if upload_success:
                     perf_logger.log_cloud_latency(thingspeak.get_last_upload_latency_ms())
