@@ -4,7 +4,7 @@
 > **Project:** Smart Home IoT Cognitive Backplane  
 > **Architecture:** 3 × Distributed ESP32 Sensor Nodes + 1 × Raspberry Pi Edge Coordinator  
 > **Firmware source:** [`firmware/`](./firmware/) | **Pi source:** [`raspberry_pi/`](./raspberry_pi/)
-
+4TH SEM MAIN EL
 ---
 
 ## 1. System Architecture Overview
