@@ -131,12 +131,15 @@ function buildZoneRisks(globalRisk: number): number[] {
   ];
 }
 
+// ── Default per-zone risks for simulation ────────────────────────
+const DEFAULT_ZONE_RISKS: number[] = [0.20, 0.25, 0.15, 0.20, 0.05];
+
 // ─────────────────────────────────────────────────────────────────
 export function DijkstraViz() {
   const [mode, setMode]     = useState<"live" | "sim">("live");
 
-  // ── Simulation state ──
-  const [simRisk, setSimRisk]     = useState(0.25);
+  // ── Simulation state: individual per-zone risk values ──
+  const [zoneRisks, setZoneRisks] = useState<number[]>([...DEFAULT_ZONE_RISKS]);
   const [simSource, setSimSource] = useState(0);
   const [simResult, setSimResult] = useState<DijkResult | null>(null);
   const [running, setRunning]     = useState(false);
@@ -159,9 +162,8 @@ export function DijkstraViz() {
     })
   );
 
-  // ── Sim helpers ──
-  const simRisks   = buildZoneRisks(simRisk);
-  const simEdgeW   = STATIC_EDGES.map(([a, b, d]) => computeEdgeWeight(simRisks, a, b, d));
+  // ── Sim helpers — use per-zone risks directly ──
+  const simEdgeW = STATIC_EDGES.map(([a, b, d]) => computeEdgeWeight(zoneRisks, a, b, d));
 
   const simPathSet = simResult
     ? new Set<string>(
@@ -172,10 +174,16 @@ export function DijkstraViz() {
       )
     : new Set<string>();
 
+  // Update a single zone's risk value
+  const handleZoneRisk = (zoneIdx: number, val: number) => {
+    setZoneRisks(prev => { const next = [...prev]; next[zoneIdx] = val; return next; });
+    handleReset();
+  };
+
   const handleRun = useCallback(() => {
     if (running) return;
     setSimResult(null); setStepIdx(0); setRunning(true);
-    const res = runDijkstra(simRisks, simSource, 4);
+    const res = runDijkstra(zoneRisks, simSource, 4);
     setSimResult(res);
     let i = 0;
     function next() {
@@ -185,11 +193,16 @@ export function DijkstraViz() {
       else setRunning(false);
     }
     timerRef.current = setTimeout(next, 200);
-  }, [simRisk, simSource, running]);
+  }, [zoneRisks, simSource, running]);
 
   const handleReset = () => {
     clearTimeout(timerRef.current);
     setSimResult(null); setStepIdx(0); setRunning(false);
+  };
+
+  const handleResetZones = () => {
+    setZoneRisks([...DEFAULT_ZONE_RISKS]);
+    handleReset();
   };
 
   // ── Shared graph renderer ─────────────────────────────────────
@@ -530,10 +543,10 @@ export function DijkstraViz() {
               </h3>
               <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginBottom: "1rem",
                 fontFamily: "var(--font)" }}>
-                5 zones · 6 edges · Adjust global risk to explore different routing outcomes
+                5 zones · 6 edges · Set each zone's risk individually — watch edge weights and the optimal path update in real time
               </p>
 
-              <GraphSVG risks={simRisks} edgeWeights={simEdgeW}
+              <GraphSVG risks={zoneRisks} edgeWeights={simEdgeW}
                 pathSet={simPathSet} path={simResult?.path ?? []} />
 
               {/* Legend */}
@@ -555,20 +568,46 @@ export function DijkstraViz() {
               transition={{ delay: 0.1 }}
               style={{ padding: "1.5rem", display: "flex", flexDirection: "column", gap: "1.25rem" }}>
 
-              {/* Risk Slider */}
+              {/* ── Per-zone risk sliders ── */}
               <div>
-                <label style={{ fontFamily: "var(--font)", fontSize: "0.85rem", fontWeight: 700,
-                  color: "var(--text-secondary)", display: "block", marginBottom: 8 }}>
-                  Global Risk Score: <span style={{ color: "var(--teal-dark)", fontSize: "1rem" }}>
-                    {(simRisk * 100).toFixed(0)}%
-                  </span>
-                </label>
-                <input type="range" min={0} max={1} step={0.01}
-                  value={simRisk} onChange={e => { setSimRisk(+e.target.value); handleReset(); }} />
-                <div style={{ display: "flex", justifyContent: "space-between",
-                  fontSize: "0.68rem", color: "var(--text-muted)",
-                  fontFamily: "var(--font)", marginTop: 3 }}>
-                  <span>Safe (0%)</span><span>Critical (100%)</span>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                  <label style={{ fontFamily: "var(--font)", fontSize: "0.85rem", fontWeight: 700,
+                    color: "var(--text-secondary)" }}>
+                    🎚️ Per-Zone Risk Values
+                  </label>
+                  <motion.button whileTap={{ scale: 0.92 }}
+                    onClick={handleResetZones}
+                    style={{ padding: "3px 12px", borderRadius: 20, border: "1px solid rgba(255,255,255,0.50)",
+                      fontSize: "0.68rem", fontWeight: 700, fontFamily: "var(--font)", cursor: "pointer",
+                      background: "rgba(255,255,255,0.22)", color: "var(--text-secondary)" }}>
+                    Reset All
+                  </motion.button>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+                  {NODE_NAMES.map((name, zi) => {
+                    const risk = zoneRisks[zi];
+                    const color = risk < 0.20 ? "#0d9488" : risk < 0.40 ? "#38bdf8" : risk < 0.65 ? "#f59e0b" : risk < 0.85 ? "#f97316" : "#f43f5e";
+                    return (
+                      <div key={zi}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                          <span style={{ fontFamily: "var(--font)", fontSize: "0.78rem", fontWeight: 700,
+                            color: "var(--text-secondary)" }}>
+                            {NODE_ICONS[zi]} {name.split(" ")[0]}
+                            {NODE_SENSORS[zi] && <span style={{ fontWeight: 400, fontSize: "0.68rem",
+                              color: "var(--text-muted)", marginLeft: 5 }}>· {NODE_SENSORS[zi]}</span>}
+                          </span>
+                          <span style={{ fontFamily: "monospace", fontSize: "0.80rem", fontWeight: 800,
+                            color, minWidth: 38, textAlign: "right" }}>
+                            {(risk * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                        <input type="range" min={0} max={1} step={0.01}
+                          value={risk}
+                          onChange={e => handleZoneRisk(zi, +e.target.value)}
+                          style={{ accentColor: color }} />
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 

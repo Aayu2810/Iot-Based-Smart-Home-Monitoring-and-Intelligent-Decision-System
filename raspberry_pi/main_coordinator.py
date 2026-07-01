@@ -13,6 +13,25 @@ import logging
 import signal
 from datetime import datetime
 
+# Load .env file if present (secrets: ThingSpeak API keys, etc.)
+# Search order: same directory as this script (Pi deployment), then one level up (dev machine).
+try:
+    from dotenv import load_dotenv
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _env_candidates = [
+        os.path.join(_here, ".env"),        # raspberry_pi/.env  ← Pi has .env here
+        os.path.join(_here, "..", ".env"),  # project-root/.env  ← dev machine
+    ]
+    for _env_path in _env_candidates:
+        if os.path.isfile(_env_path):
+            load_dotenv(dotenv_path=_env_path)
+            print(f"[dotenv] Loaded: {os.path.abspath(_env_path)}", flush=True)
+            break
+    else:
+        print("[dotenv] No .env file found in candidate paths", flush=True)
+except ImportError:
+    pass  # python-dotenv not installed; fall back to config.json values
+
 # Import modules
 from mqtt_subscriber import MQTTSubscriber
 from dataset_recorder import DatasetRecorder
@@ -53,8 +72,8 @@ def handle_sigint(signum, frame):
 
 signal.signal(signal.SIGINT, handle_sigint)
 
-# Configuration flags for local development
-ENABLE_THINGSPEAK = False
+# Configuration flags - ThingSpeak cloud integration enabled
+ENABLE_THINGSPEAK = True
 
 # Global Edge Algorithm Instances
 calibration = SensorCalibration()
@@ -90,6 +109,11 @@ latest_env = {}      # Environmental sensor state (temperature, humidity, gas_pp
 latest_motion = {}   # Motion sensor state (pir_state, pir_raw)
 latest_light = {}    # Light sensor state (ldr_state)
 
+# Store latest processed sensor readings for ThingSpeak upload
+latest_processed_raw = None
+latest_processed_norm = None
+latest_alerts = {}
+
 def build_combined_payload():
     """
     Aggregate the latest readings from all three sensor nodes into a unified payload.
@@ -97,20 +121,34 @@ def build_combined_payload():
     This function is called by each node's callback after updating its state.
     It constructs the combined payload expected by process_sensor_payload().
 
+    Field Mapping:
+        ESP32 Environmental Node (home/node/env/sensors):
+            temperature → t_raw (degrees Celsius)
+            humidity    → h_raw (percentage)
+            gas_ppm     → mq2_raw (PPM - already converted by ESP32!)
+
+        ESP32 Motion Node (home/node/motion/sensors):
+            pir_state   → pir_raw (boolean: 0 or 1)
+
+        ESP32 Light Node (home/node/light/sensors):
+            ldr_raw     → ldr_raw (ADC value: 0-4095)
+
     Returns:
         dict: Combined payload with all sensor fields
     """
     combined = {
-        # Environmental node mappings
+        # Environmental node: ESP32 publishes temperature in Celsius
         "t_raw": latest_env.get("temperature", 25.0),
+        # Environmental node: ESP32 publishes humidity as percentage
         "h_raw": latest_env.get("humidity", 40.0),
+        # Environmental node: ESP32 publishes gas_ppm (ALREADY PPM, not ADC!)
         "mq2_raw": latest_env.get("gas_ppm", 0),
 
-        # Motion node mappings
+        # Motion node: ESP32 publishes pir_state as boolean
         "pir_raw": int(latest_motion.get("pir_state", False)),
 
-        # Light node mappings (convert LDR state to ADC-like range)
-        "ldr_raw": 4095 if latest_light.get("ldr_state", 0) else 0,
+        # Light node: ESP32 publishes ldr_raw as ADC value (0-4095)
+        "ldr_raw": latest_light.get("ldr_raw", 2000),
 
         # Sequence number placeholder
         "seq": 0
@@ -123,6 +161,7 @@ def process_sensor_payload(payload_dict, mqtt_client, recorder=None):
     Main pipeline: Executes the edge algorithms when new raw sensor data arrives.
     Replaces the C++ firmware loop logic.
     """
+    global latest_processed_raw, latest_processed_norm, latest_alerts
     try:
         # 1. Parse raw values (assuming payload comes from the ESP32 sensor nodes)
         raw = SensorReadings()
@@ -136,7 +175,10 @@ def process_sensor_payload(payload_dict, mqtt_client, recorder=None):
         # 2. Calibration
         raw.cal_temp = calibration.calibrate_dht11(raw.raw_temp)
         raw.cal_humidity = calibration.calibrate_humidity(raw.raw_humidity)
-        raw.ppm_mq2 = calibration.read_mq2_ppm(raw.adc_mq2, calibration.data.mq2_r0_baseline)
+        # NOTE: ESP32 already converts ADC to PPM before publishing gas_ppm.
+        # Do NOT apply read_mq2_ppm() again - that would double-convert.
+        # The mq2_raw field already contains PPM values from the ESP32.
+        raw.ppm_mq2 = raw.adc_mq2  # Direct assignment - already PPM from ESP32
         raw.pir_debounced = calibration.debounce_pir(raw.pir_raw, raw.timestamp_ms)
         raw.ldr_normalized = calibration.normalize_ldr(raw.adc_ldr, calibration.data)
 
@@ -148,6 +190,11 @@ def process_sensor_payload(payload_dict, mqtt_client, recorder=None):
         # 4. Boolean Minimization Alerts
         bin_states = get_binary_states(norm)
         alerts = evaluate_alerts(bin_states)
+
+        # Store latest processed values for ThingSpeak upload
+        latest_processed_raw = raw
+        latest_processed_norm = norm
+        latest_alerts = alerts if isinstance(alerts, dict) else {"critical": getattr(alerts, "critical", False)}
 
         # 5. Health Monitor
         fault_detected = health_monitor.perform_health_check(raw)
@@ -162,7 +209,15 @@ def process_sensor_payload(payload_dict, mqtt_client, recorder=None):
         actuators.set_state_output(current_state)
         actuators.update(current_state, int(time.time() * 1000))
 
-        # 8. Graph Topology & Pathfinding (Execute only if state is elevated or periodically)
+        # 8. Always publish FSM state + risk so the frontend reflects the current state,
+        #    even when IDLE. Graph data (Dijkstra/BFS) is only computed and included
+        #    when state >= MONITOR because pathfinding is only meaningful under hazard.
+        topology_payload = {
+            "ts": int(time.time() * 1000),
+            "risk": norm.risk_score,
+            "state": fsm.get_current_state_name(),
+        }
+
         if current_state >= SystemState.STATE_MONITOR:
             # Update weights globally based on fused risk
             graph.update_risk_scores(norm.risk_score)
@@ -183,18 +238,13 @@ def process_sensor_payload(payload_dict, mqtt_client, recorder=None):
             dijkstra_result = dijkstra.run(graph, hazard_node, exit_node)
             perf_logger.log_dijkstra_time(dijkstra_result.execution_time_us)
 
-            # Publish updated topology states back to network
-            topology_payload = {
-                "ts": int(time.time() * 1000),
-                "risk": norm.risk_score,
-                "state": fsm.get_current_state_name(),
-                "graph": {
-                    "bfs_order": bfs_result.order[:bfs_result.n_visited],
-                    "dijk_path": dijkstra_result.path[:dijkstra_result.path_length],
-                    "dijk_cost": dijkstra_result.total_cost
-                }
+            topology_payload["graph"] = {
+                "bfs_order": bfs_result.order[:bfs_result.n_visited],
+                "dijk_path": dijkstra_result.path[:dijkstra_result.path_length],
+                "dijk_cost": dijkstra_result.total_cost
             }
-            mqtt_client.publish("home/sensors/normalized", json.dumps(topology_payload))
+
+        mqtt_client.publish("home/sensors/normalized", json.dumps(topology_payload))
 
         if recorder:
             is_critical = alerts.get("critical", False) if isinstance(alerts, dict) else getattr(alerts, "critical", False)
@@ -248,6 +298,45 @@ def main():
     viz = GraphVisualizer()
     reporter = ReportGenerator()
 
+    # Initialize ThingSpeak.
+    # Priority: environment variable → config.json → empty/0 (disabled).
+    if ENABLE_THINGSPEAK:
+        ts_config = config.get("thingspeak", {})
+
+        _PLACEHOLDERS = {
+            "REPLACE_WITH_YOUR_THINGSPEAK_WRITE_API_KEY",
+            "REPLACE_WITH_YOUR_THINGSPEAK_READ_API_KEY",
+            "YOUR_API_KEY", "YOUR_WRITE_KEY", "YOUR_READ_KEY", "",
+        }
+
+        def _pick(env_var, cfg_val, default=""):
+            """env var → config.json value → default, skipping placeholders."""
+            env_val = os.getenv(env_var, "")
+            if env_val and env_val not in _PLACEHOLDERS:
+                return env_val
+            cfg_str = str(cfg_val) if cfg_val is not None else ""
+            if cfg_str and cfg_str not in _PLACEHOLDERS:
+                return cfg_str
+            return default
+
+        ts_write_key  = _pick("THINGSPEAK_WRITE_API_KEY", ts_config.get("write_api_key", ""))
+        ts_read_key   = _pick("THINGSPEAK_READ_API_KEY",  ts_config.get("read_api_key",  ""))
+        ts_channel_id = _pick("THINGSPEAK_CHANNEL_ID",    ts_config.get("channel_id", 0), "0")
+
+        # Diagnostic logging — mask middle of write key for security
+        _key_disp = (
+            f"{ts_write_key[:4]}...{ts_write_key[-4:]}" if len(ts_write_key) > 8 else "(not set)"
+        )
+        logger.info(f"[ThingSpeak] Resolved channel_id  = {ts_channel_id}")
+        logger.info(f"[ThingSpeak] Resolved write_key   = {_key_disp}")
+        logger.info(f"[ThingSpeak] Resolved read_key    = {'set' if ts_read_key else 'not set'}")
+
+        thingspeak.initialize(api_key=ts_write_key)
+        if thingspeak.is_initialized:
+            logger.info("[ThingSpeak] Initialization SUCCEEDED — uploads will start after 15 s")
+        else:
+            logger.warning("[ThingSpeak] Initialization FAILED — check THINGSPEAK_WRITE_API_KEY in raspberry_pi/.env")
+
     # =========================================================================
     # Define Callback Functions (Closures)
     # =========================================================================
@@ -298,7 +387,7 @@ def main():
         global latest_light
         try:
             latest_light = payload
-            logger.info(f"Updated light state: LDR={payload.get('ldr_state')}")
+            logger.info(f"Updated light state: LDR_raw={payload.get('ldr_raw')}, LDR_norm={payload.get('ldr_norm')}")
 
             # Aggregate and process
             combined_payload = build_combined_payload()
@@ -405,21 +494,18 @@ def main():
 
             # 5. Push HTTP metrics up to ThingSpeak (Subject: Networks HTTP rate limiting)
             if ENABLE_THINGSPEAK and thingspeak.should_upload(5000):
-                # Ensure we have the latest payload data to upload
-                alerts = detector.get_latest_anomalies()
-                is_critical = any(a.get("z_score", 0) > config["anomaly"]["z_score_threshold"] for a in alerts)
-                alert_flags = {"critical": is_critical}
-
-                # Construct dummy raw/norm objects if they aren't globally available here
-                # In a full implementation, you'd pull the latest from the fusion engine
-                # For now we use the fusion's current risk score and fsm state
-                raw = SensorReadings()
-                norm = NormalizedValues()
-                norm.risk_score = fusion.get_risk_score()
-
-                upload_success = thingspeak.upload(raw, norm, fsm.get_current_state(), alert_flags)
-                if upload_success:
-                    perf_logger.log_cloud_latency(thingspeak.get_last_upload_latency_ms())
+                # Use the latest processed sensor data if available
+                if latest_processed_raw is not None and latest_processed_norm is not None:
+                    upload_success = thingspeak.upload(
+                        latest_processed_raw,
+                        latest_processed_norm,
+                        fsm.get_current_state(),
+                        latest_alerts
+                    )
+                    if upload_success:
+                        perf_logger.log_cloud_latency(thingspeak.get_last_upload_latency_ms())
+                else:
+                    logger.debug("ThingSpeak upload skipped: no sensor data processed yet")
 
     except KeyboardInterrupt:
         pass

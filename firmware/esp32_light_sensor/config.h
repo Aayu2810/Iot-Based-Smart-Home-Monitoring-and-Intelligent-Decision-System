@@ -3,15 +3,10 @@
 #define CONFIG_H
 
 // --- Hardware GPIO Configurations ---
-#define LDR_ADC_PIN      33   // ADC1_CH5 (GPIO33) for LDR
-#define LCD_SDA_PIN   21   // Physical pin D21 (GPIO21) for I2C SDA
-#define LCD_SCL_PIN   22   // Physical pin D22 (GPIO22) for I2C SCL
-#define SINGLE_LED_PIN   12   // Physical pin D12 for single LED
-
-// --- LCD I2C Configuration ---
-#define LCD_I2C_ADDR 0x27   // 0x27 or 0x3F depending on backpack
-#define LCD_COLUMNS 16
-#define LCD_ROWS 2
+#define LDR_ADC_PIN      33   // ADC1_CH5 (GPIO33) for LDR voltage divider
+// Wiring: 3.3V → LDR → GPIO33 → 10kΩ → GND
+// NOTE: GPIO12 is a boot-strapping pin — wire LED active-HIGH (GPIO12 → R → GND) only
+#define SINGLE_LED_PIN   2    // GPIO2 (onboard LED or external LED)
 
 // --- WiFi Credentials & Server Targets ---
 #define WIFI_SSID "YOUR_WIFI_SSID"

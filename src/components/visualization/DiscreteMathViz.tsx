@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useDashboardStore } from "../../store/dashboardStore";
+import { Radio, Sliders } from "lucide-react";
 
 // ── FSM data from raspberry_pi/edge_algorithms/fsm_engine.py ─────
 const STATES = ["IDLE", "MONITOR", "ALERT_LOW", "ALERT_HIGH", "CRITICAL", "FAULT"];
@@ -134,49 +135,221 @@ export function DiscreteMathViz() {
   );
 }
 
+// ── Risk formula mirrors raspberry_pi/edge_algorithms/risk_engine.py ─
+// Simplified version: temperature contributes if >30°C, gas if >100 ppm,
+// PIR adds motion risk, low light (ldr_norm < 0.15) adds slight risk.
+function computeSimRisk(temp: number, gas: number, pir: boolean, ldrRaw: number): number {
+  const ldrNorm = Math.min(1, Math.max(0, ldrRaw / 4095));
+  const tempR   = Math.min(1, Math.max(0, (temp - 20) / 60));   // 0 at 20°C, 1 at 80°C
+  const gasR    = Math.min(1, Math.max(0, gas / 1000));          // 0 at 0ppm, 1 at 1000ppm
+  const pirR    = pir ? 0.15 : 0;
+  const ldrR    = ldrNorm < 0.15 ? 0.05 : 0;                    // low-light slight risk
+  return Math.min(1, 0.45 * tempR + 0.40 * gasR + pirR + ldrR);
+}
+
 // ── FSM Diagram — now driven by live MQTT fsm_state ───────────────
 function FSMDiagram() {
   const { current } = useDashboardStore();
-  const liveFsmState = current.fsm_state;  // e.g. "MONITOR"
+  const liveFsmState = current.fsm_state;
   const liveRisk     = current.risk;
-  const liveStateIdx = STATES.indexOf(liveFsmState);  // -1 if unknown
+  const liveStateIdx = STATES.indexOf(liveFsmState);
   const liveSigmaIdx = getSigmaIdx(liveRisk, liveFsmState === "FAULT");
 
-  // User can still click to explore; null means "show live"
+  // Sim sensor state
+  const [simMode,    setSimMode]   = useState(false);
+  const [simTemp,    setSimTemp]   = useState(25);     // °C
+  const [simGas,     setSimGas]    = useState(150);    // ppm
+  const [simPir,     setSimPir]    = useState(false);
+  const [simLdrRaw,  setSimLdrRaw] = useState(2000);   // 0–4095
+
+  // Derived sim values
+  const simRisk             = computeSimRisk(simTemp, simGas, simPir, simLdrRaw);
+  const simSigmaIdx         = getSigmaIdx(simRisk, false);
+  // Derive FSM state from IDLE row using computed sigma (mirrors fsm_engine.py behaviour)
+  const derivedSimStateName = STATES[TRANSITION[0][simSigmaIdx]];
+
+  // User can still click to explore; null means "show live/sim"
   const [manualActive, setManualActive] = useState<number | null>(null);
-  const activeIdx = manualActive !== null ? manualActive : liveStateIdx;
+
+  // Active state depends on mode
+  const effectiveStateIdx = simMode
+    ? STATES.indexOf(derivedSimStateName)
+    : liveStateIdx;
+  const effectiveStateName = simMode ? derivedSimStateName : liveFsmState;
+  const effectiveSigmaIdx  = simMode ? simSigmaIdx : liveSigmaIdx;
+  const activeIdx = manualActive !== null ? manualActive : effectiveStateIdx;
 
   return (
-    <div style={{ display:"grid", gridTemplateColumns:"1fr", gap:"1.5rem" }} className="fsm-layout">
-      <motion.div className="glass-card" style={{ padding:"1.5rem" }}
-        initial={{ opacity:0, scale:0.96 }} animate={{ opacity:1, scale:1 }}>
-
-        {/* Header with live status */}
-        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4 }}>
-          <h3 style={{ fontFamily:"var(--font)", fontSize:"1.1rem", fontWeight:800,
-            color:"var(--text-primary)", margin:0 }}>
-            6-State Deterministic FSM
-          </h3>
-          {/* Live state badge */}
-          <motion.div animate={{ opacity:[1,0.5,1] }} transition={{ repeat:Infinity, duration:1.8 }}
-            style={{ display:"flex", alignItems:"center", gap:5, padding:"3px 10px",
-              borderRadius:20,
-              background: liveStateIdx >= 0
-                ? STATE_COLORS[liveFsmState].bg
-                : "rgba(200,200,200,0.15)",
-              border: `1px solid ${liveStateIdx >= 0 ? STATE_COLORS[liveFsmState].border : "#aaa"}` }}>
-            <div style={{ width:7, height:7, borderRadius:"50%",
-              background: liveStateIdx >= 0 ? STATE_COLORS[liveFsmState].text : "#aaa" }} />
-            <span style={{ fontSize:"0.68rem", fontWeight:700, fontFamily:"var(--font)",
-              color: liveStateIdx >= 0 ? STATE_COLORS[liveFsmState].text : "#666" }}>
-              {liveStateIdx >= 0 ? `LIVE: ${liveFsmState}` : "WAITING…"}
-            </span>
-          </motion.div>
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+      {/* ── Mode toggle ── */}
+      <motion.div style={{ display: "flex", justifyContent: "center" }}
+        initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
+        <div style={{
+          display: "flex", borderRadius: 14, overflow: "hidden",
+          border: "1.5px solid rgba(255,255,255,0.50)",
+          background: "rgba(255,255,255,0.18)", backdropFilter: "blur(12px)",
+        }}>
+          {(["live", "sim"] as const).map(m => (
+            <motion.button key={m}
+              onClick={() => { setSimMode(m === "sim"); setManualActive(null); }}
+              whileTap={{ scale: 0.95 }}
+              style={{
+                padding: "10px 28px", fontFamily: "var(--font)", fontSize: "0.88rem",
+                fontWeight: 700, border: "none", cursor: "pointer",
+                background: (simMode ? m === "sim" : m === "live")
+                  ? "linear-gradient(135deg,var(--teal),var(--sky-dark))" : "transparent",
+                color: (simMode ? m === "sim" : m === "live") ? "white" : "var(--text-secondary)",
+                display: "flex", alignItems: "center", gap: 8, transition: "background 0.2s",
+              }}>
+              {m === "live" ? <Radio size={15} /> : <Sliders size={15} />}
+              {m === "live" ? "Live MQTT" : "Simulation"}
+            </motion.button>
+          ))}
         </div>
+      </motion.div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr", gap:"1.5rem" }} className="fsm-layout">
+        <motion.div className="glass-card" style={{ padding:"1.5rem" }}
+          initial={{ opacity:0, scale:0.96 }} animate={{ opacity:1, scale:1 }}>
+
+          {/* Header with live status */}
+          <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:4, flexWrap:"wrap" }}>
+            <h3 style={{ fontFamily:"var(--font)", fontSize:"1.1rem", fontWeight:800,
+              color:"var(--text-primary)", margin:0 }}>
+              6-State Deterministic FSM
+            </h3>
+            {/* State badge */}
+            <motion.div animate={{ opacity:[1,0.5,1] }} transition={{ repeat:Infinity, duration:1.8 }}
+              style={{ display:"flex", alignItems:"center", gap:5, padding:"3px 10px",
+                borderRadius:20,
+                background: effectiveStateIdx >= 0
+                  ? STATE_COLORS[effectiveStateName]?.bg ?? "rgba(200,200,200,0.15)"
+                  : "rgba(200,200,200,0.15)",
+                border: `1px solid ${effectiveStateIdx >= 0 ? STATE_COLORS[effectiveStateName]?.border ?? "#aaa" : "#aaa"}` }}>
+              <div style={{ width:7, height:7, borderRadius:"50%",
+                background: effectiveStateIdx >= 0 ? STATE_COLORS[effectiveStateName]?.text ?? "#aaa" : "#aaa" }} />
+              <span style={{ fontSize:"0.68rem", fontWeight:700, fontFamily:"var(--font)",
+                color: effectiveStateIdx >= 0 ? STATE_COLORS[effectiveStateName]?.text ?? "#666" : "#666" }}>
+                {simMode ? `SIM: ${effectiveStateName}` : effectiveStateIdx >= 0 ? `LIVE: ${liveFsmState}` : "WAITING…"}
+              </span>
+            </motion.div>
+          </div>
 
         <p style={{ fontSize:"0.78rem", color:"var(--text-muted)", fontFamily:"var(--font)", marginBottom:"0.6rem" }}>
-          Active state highlighted from live MQTT · Click any node to explore transitions · Risk: <strong style={{ color:"var(--teal-dark)" }}>{(liveRisk*100).toFixed(1)}% → σ{liveSigmaIdx}</strong>
+          {simMode
+            ? <>Simulation mode · Adjust sensor values below to see FSM transitions · Risk: <strong style={{ color:"var(--teal-dark)" }}>{(simRisk*100).toFixed(1)}% → σ{simSigmaIdx}</strong></>
+            : <>Active state highlighted from live MQTT · Click any node to explore transitions · Risk: <strong style={{ color:"var(--teal-dark)" }}>{(liveRisk*100).toFixed(1)}% → σ{liveSigmaIdx}</strong></>
+          }
         </p>
+
+        {/* ── Simulation sensor inputs ── */}
+        {simMode && (
+          <motion.div initial={{ opacity:0, y:-8 }} animate={{ opacity:1, y:0 }}
+            style={{ background:"rgba(245,158,11,0.08)", border:"1px solid rgba(245,158,11,0.30)",
+              borderRadius:12, padding:"1rem", marginBottom:"1rem" }}>
+            <div style={{ fontFamily:"var(--font)", fontSize:"0.78rem", fontWeight:700,
+              color:"#b45309", marginBottom:"0.75rem", textTransform:"uppercase", letterSpacing:"0.08em" }}>
+              🎛️ Sensor Input Simulation
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"0.75rem" }}>
+
+              {/* Temperature */}
+              <div>
+                <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
+                  <span style={{ fontFamily:"var(--font)", fontSize:"0.76rem", fontWeight:700,
+                    color:"var(--text-secondary)" }}>🌡️ Temp (Kitchen)</span>
+                  <span style={{ fontFamily:"monospace", fontSize:"0.76rem", fontWeight:800,
+                    color: simTemp > 45 ? "#f43f5e" : simTemp > 35 ? "#f97316" : "#0d9488" }}>
+                    {simTemp}°C
+                  </span>
+                </div>
+                <input type="range" min={15} max={80} step={1} value={simTemp}
+                  onChange={e => setSimTemp(+e.target.value)}
+                  style={{ accentColor: simTemp > 45 ? "#f43f5e" : simTemp > 35 ? "#f97316" : "#0d9488" }} />
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:"0.63rem",
+                  color:"var(--text-muted)", fontFamily:"var(--font)" }}>
+                  <span>15°C</span><span style={{ color:"#f59e0b" }}>35° fire risk</span><span>80°C</span>
+                </div>
+              </div>
+
+              {/* Gas PPM */}
+              <div>
+                <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
+                  <span style={{ fontFamily:"var(--font)", fontSize:"0.76rem", fontWeight:700,
+                    color:"var(--text-secondary)" }}>💨 Gas/MQ-2 (Kitchen)</span>
+                  <span style={{ fontFamily:"monospace", fontSize:"0.76rem", fontWeight:800,
+                    color: simGas > 600 ? "#f43f5e" : simGas > 300 ? "#f97316" : "#0d9488" }}>
+                    {simGas} ppm
+                  </span>
+                </div>
+                <input type="range" min={0} max={1000} step={10} value={simGas}
+                  onChange={e => setSimGas(+e.target.value)}
+                  style={{ accentColor: simGas > 600 ? "#f43f5e" : simGas > 300 ? "#f97316" : "#0d9488" }} />
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:"0.63rem",
+                  color:"var(--text-muted)", fontFamily:"var(--font)" }}>
+                  <span>0</span><span style={{ color:"#f59e0b" }}>300 smoke alert</span><span>1000 ppm</span>
+                </div>
+              </div>
+
+              {/* LDR */}
+              <div>
+                <div style={{ display:"flex", justifyContent:"space-between", marginBottom:3 }}>
+                  <span style={{ fontFamily:"var(--font)", fontSize:"0.76rem", fontWeight:700,
+                    color:"var(--text-secondary)" }}>💡 LDR Raw (Bedroom)</span>
+                  <span style={{ fontFamily:"monospace", fontSize:"0.76rem", fontWeight:800,
+                    color: simLdrRaw < 600 ? "#8b5cf6" : "#0d9488" }}>
+                    {simLdrRaw} ({(simLdrRaw/4095*100).toFixed(0)}%)
+                  </span>
+                </div>
+                <input type="range" min={0} max={4095} step={50} value={simLdrRaw}
+                  onChange={e => setSimLdrRaw(+e.target.value)}
+                  style={{ accentColor: simLdrRaw < 600 ? "#8b5cf6" : "#0d9488" }} />
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:"0.63rem",
+                  color:"var(--text-muted)", fontFamily:"var(--font)" }}>
+                  <span>0 (dark)</span><span>4095 (bright)</span>
+                </div>
+              </div>
+
+              {/* PIR toggle */}
+              <div style={{ display:"flex", flexDirection:"column", justifyContent:"center",
+                padding:"0.5rem 0.75rem", borderRadius:10,
+                background: simPir ? "rgba(249,115,22,0.12)" : "rgba(255,255,255,0.18)",
+                border:`1px solid ${simPir ? "rgba(249,115,22,0.40)" : "rgba(255,255,255,0.45)"}`,
+                transition:"background 0.2s" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ fontFamily:"var(--font)", fontSize:"0.76rem", fontWeight:700,
+                    color:"var(--text-secondary)" }}>🚨 PIR Motion (Door)</span>
+                  <label className="switch">
+                    <input type="checkbox" checked={simPir} onChange={e => setSimPir(e.target.checked)} />
+                    <span className="switch-slider" />
+                  </label>
+                </div>
+                <div style={{ marginTop:4, fontSize:"0.68rem", fontFamily:"var(--font)",
+                  fontWeight:700, color: simPir ? "#c2410c" : "var(--text-muted)" }}>
+                  {simPir ? "Motion Detected" : "No Motion"}
+                </div>
+              </div>
+            </div>
+
+            {/* Computed risk readout */}
+            <div style={{ marginTop:"0.75rem", display:"flex", alignItems:"center", gap:12,
+              padding:"0.6rem 0.85rem", borderRadius:10,
+              background:"rgba(255,255,255,0.25)", border:"1px solid rgba(255,255,255,0.50)" }}>
+              <span style={{ fontFamily:"var(--font)", fontSize:"0.75rem", fontWeight:700,
+                color:"var(--text-muted)" }}>Computed Risk →</span>
+              <span style={{ fontFamily:"monospace", fontSize:"1.1rem", fontWeight:900,
+                color: simRisk >= 0.65 ? "#f43f5e" : simRisk >= 0.35 ? "#f97316" : "#0d9488" }}>
+                {(simRisk*100).toFixed(1)}%
+              </span>
+              <span style={{ fontFamily:"var(--font)", fontSize:"0.75rem", fontWeight:700,
+                color:"var(--text-muted)" }}>→ σ{simSigmaIdx} →</span>
+              <span style={{ fontFamily:"var(--font)", fontSize:"0.82rem", fontWeight:800,
+                color: STATE_COLORS[derivedSimStateName]?.text ?? "var(--text-secondary)" }}>
+                {derivedSimStateName}
+              </span>
+            </div>
+          </motion.div>
+        )}
 
         <svg viewBox="0 0 480 390" style={{ width:"100%", maxWidth:480, display:"block", margin:"0 auto" }}>
           <defs>
@@ -216,16 +389,16 @@ function FSMDiagram() {
           {STATES.map((s, i) => {
             const [x,y] = FSM_POS[i];
             const c = STATE_COLORS[s];
-            const isLive   = i === liveStateIdx;
-            const isManual = manualActive === i;
-            const isActive = isLive || isManual;
+            const isEffective = i === effectiveStateIdx;
+            const isManual    = manualActive === i;
+            const isActive    = isEffective || isManual;
 
             return (
               <g key={s} style={{ cursor:"pointer" }}
                 onClick={() => setManualActive(manualActive === i ? null : i)}>
 
-                {/* Pulsing ring for live state */}
-                {isLive && (
+                {/* Pulsing ring for current state */}
+                {isEffective && (
                   <motion.circle cx={x} cy={y} r={34}
                     fill={c.bg}
                     stroke={c.border} strokeWidth={3}
@@ -235,7 +408,7 @@ function FSMDiagram() {
                 )}
 
                 {/* Manual click ring */}
-                {isManual && !isLive && (
+                {isManual && !isEffective && (
                   <motion.circle cx={x} cy={y} r={36} fill="none"
                     stroke={c.border} strokeWidth={2.5} strokeDasharray="5 3"
                     animate={{ rotate:360 }} transition={{ repeat:Infinity, duration:4, ease:"linear" }}
@@ -256,18 +429,19 @@ function FSMDiagram() {
         </svg>
       </motion.div>
 
-      {/* Transition table with live sigma highlight */}
+      {/* Transition table with sigma highlight */}
       <motion.div className="glass-card" style={{ padding:"1.5rem", overflowX:"auto" }}
         initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.1 }}>
         <h4 style={{ fontFamily:"var(--font)", fontSize:"0.95rem", fontWeight:800,
           color:"var(--text-primary)", marginBottom:"0.85rem" }}>
           δ Transition Table
-          {liveStateIdx >= 0 && (
+          {effectiveStateIdx >= 0 && (
             <span style={{ marginLeft:10, fontSize:"0.72rem", fontWeight:600,
-              color:"var(--teal-dark)", background:"rgba(13,148,136,0.12)",
-              border:"1px solid rgba(13,148,136,0.30)", borderRadius:8,
-              padding:"2px 8px", fontFamily:"var(--font)" }}>
-              Live σ{liveSigmaIdx} ({SIGMA[liveSigmaIdx].split("\n")[1]})
+              color: simMode ? "#b45309" : "var(--teal-dark)",
+              background: simMode ? "rgba(245,158,11,0.12)" : "rgba(13,148,136,0.12)",
+              border: `1px solid ${simMode ? "rgba(245,158,11,0.30)" : "rgba(13,148,136,0.30)"}`,
+              borderRadius:8, padding:"2px 8px", fontFamily:"var(--font)" }}>
+              {simMode ? "Sim" : "Live"} σ{effectiveSigmaIdx} ({SIGMA[effectiveSigmaIdx].split("\n")[1]})
             </span>
           )}
         </h4>
@@ -279,9 +453,9 @@ function FSMDiagram() {
                 <th key={i}
                   style={{ padding:"4px 6px", fontWeight:700,
                     whiteSpace:"pre", textAlign:"center", lineHeight:1.3,
-                    color: i === liveSigmaIdx ? "white" : "var(--teal-dark)",
-                    background: i === liveSigmaIdx ? "rgba(13,148,136,0.40)" : "transparent",
-                    borderRadius: i === liveSigmaIdx ? 6 : 0 }}>
+                    color: i === effectiveSigmaIdx ? "white" : "var(--teal-dark)",
+                    background: i === effectiveSigmaIdx ? "rgba(13,148,136,0.40)" : "transparent",
+                    borderRadius: i === effectiveSigmaIdx ? 6 : 0 }}>
                   {s}
                 </th>
               ))}
@@ -291,20 +465,20 @@ function FSMDiagram() {
             {STATES.map((st, si) => (
               <tr key={st}
                 style={{ background:
-                  si === liveStateIdx
+                  si === effectiveStateIdx
                     ? STATE_COLORS[st].bg
                     : (manualActive === si ? STATE_COLORS[st].bg : "transparent"),
                   cursor:"pointer" }}
                 onClick={() => setManualActive(manualActive === si ? null : si)}>
                 <td style={{ padding:"6px 8px", fontWeight:700,
                   color:STATE_COLORS[st].text, whiteSpace:"nowrap" }}>
-                  {si === liveStateIdx ? "▶ " : ""}{st}
+                  {si === effectiveStateIdx ? "▶ " : ""}{st}
                 </td>
                 {TRANSITION[si].map((nextSt, sigi) => (
                   <td key={sigi}
                     style={{ padding:"6px 8px", textAlign:"center",
                       color:STATE_COLORS[STATES[nextSt]].text, fontWeight:600,
-                      background: sigi === liveSigmaIdx ? "rgba(13,148,136,0.10)" : "transparent" }}>
+                      background: sigi === effectiveSigmaIdx ? "rgba(13,148,136,0.10)" : "transparent" }}>
                     {STATES[nextSt].replace("ALERT_","A_")}
                   </td>
                 ))}
@@ -315,6 +489,7 @@ function FSMDiagram() {
       </motion.div>
 
       <style>{`@media(min-width:900px){.fsm-layout{grid-template-columns:1fr 1fr!important;}}`}</style>
+      </div>
     </div>
   );
 }

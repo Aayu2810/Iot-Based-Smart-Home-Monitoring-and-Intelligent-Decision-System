@@ -14,8 +14,8 @@
   },
   "thingspeak": {
     "channel_id": 0,
-    "read_api_key": "YOUR_READ_KEY",
-    "write_api_key": "YOUR_WRITE_KEY"
+    "read_api_key": "REPLACE_WITH_YOUR_THINGSPEAK_READ_API_KEY",
+    "write_api_key": "REPLACE_WITH_YOUR_THINGSPEAK_WRITE_API_KEY"
   },
   "dataset": {
     "output_directory": "./smarthome_data/datasets/",

@@ -48,6 +48,30 @@ let packetCount = 0;
 let serverStartTime = Date.now();
 const packetWindow: number[] = []; // timestamps for rolling rate
 
+// ─── In-memory history buffer ─────────────────────────────────────────────────
+// Accumulates live MQTT readings so /api/history returns real-time data even
+// when the CSV files on disk are stale (e.g. dashboard runs on a different
+// machine from the Pi).
+const MAX_HISTORY_BUFFER = 8640; // ~24 h at one reading per 10 s
+
+const liveHistory: {
+  temperatures: HistoryPoint[];
+  humidities: HistoryPoint[];
+  gases: HistoryPoint[];
+  risks: HistoryPoint[];
+} = { temperatures: [], humidities: [], gases: [], risks: [] };
+
+function pushHistory(
+  field: keyof typeof liveHistory,
+  value: number,
+  ts: number
+) {
+  if (isNaN(value)) return;
+  const arr = liveHistory[field];
+  arr.push({ ts, value });
+  if (arr.length > MAX_HISTORY_BUFFER) arr.shift();
+}
+
 function recordPacket() {
   const now = Date.now();
   packetWindow.push(now);
@@ -122,6 +146,10 @@ function startMQTT() {
         latestState.humidity = data.humidity ?? latestState.humidity;
         latestState.gas_ppm = data.gas_ppm ?? latestState.gas_ppm;
         latestState.ts = Date.now();
+        const envTs = latestState.ts;
+        pushHistory("temperatures", latestState.temperature, envTs);
+        pushHistory("humidities", latestState.humidity, envTs);
+        pushHistory("gases", latestState.gas_ppm, envTs);
       } else if (topic === "home/node/motion/sensors") {
         const prevPir = latestState.pir_state;
         latestState.pir_state = Boolean(data.pir_state);
@@ -144,6 +172,7 @@ function startMQTT() {
         latestState.risk = data.risk ?? latestState.risk;
         latestState.fsm_state = data.state ?? latestState.fsm_state;
         latestState.ts = data.ts ?? Date.now();
+        pushHistory("risks", latestState.risk, latestState.ts);
 
         // Extract live graph topology (Dijkstra path + BFS order)
         if (data.graph) {
@@ -248,11 +277,21 @@ function readCSVHistory(
     return arr.filter((_, i) => i % step === 0);
   };
 
+  // Merge live MQTT buffer into CSV data so the chart shows real-time points
+  // even when the CSV files on disk are stale or absent.
+  function mergeLive(csvArr: HistoryPoint[], liveArr: HistoryPoint[]): HistoryPoint[] {
+    const filtered = liveArr.filter((p) => p.ts >= cutoffMs);
+    if (filtered.length === 0) return csvArr;
+    const combined = [...csvArr, ...filtered].sort((a, b) => a.ts - b.ts);
+    // Remove consecutive duplicates (same ms timestamp from double-write)
+    return combined.filter((p, i) => i === 0 || p.ts !== combined[i - 1].ts);
+  }
+
   return {
-    temperatures: downsample(temperatures),
-    humidities: downsample(humidities),
-    gases: downsample(gases),
-    risks: downsample(risks),
+    temperatures: downsample(mergeLive(temperatures, liveHistory.temperatures)),
+    humidities:   downsample(mergeLive(humidities,   liveHistory.humidities)),
+    gases:        downsample(mergeLive(gases,         liveHistory.gases)),
+    risks:        downsample(mergeLive(risks,         liveHistory.risks)),
   };
 }
 

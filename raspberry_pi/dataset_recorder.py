@@ -53,12 +53,13 @@ class DatasetRecorder:
         try:
             timestamp = datetime.now().isoformat()
             
-            # Reconstruct normalized metrics
-            n_T = norm.t_norm if hasattr(norm, 't_norm') else 0.0
-            n_S = norm.mq2_norm if hasattr(norm, 'mq2_norm') else 0.0
-            n_P = float(raw.pir_debounced) if hasattr(raw, 'pir_debounced') else 0.0
-            n_H = norm.h_norm if hasattr(norm, 'h_norm') else 0.0
-            n_L = norm.ldr_norm if hasattr(norm, 'ldr_norm') else 0.0
+            # Reconstruct normalized metrics using actual NormalizedValues attributes
+            # NormalizedValues class uses: n_T, n_S, n_P, n_H, n_L
+            n_T = norm.n_T if hasattr(norm, 'n_T') else 0.0
+            n_S = norm.n_S if hasattr(norm, 'n_S') else 0.0
+            n_P = norm.n_P if hasattr(norm, 'n_P') else 0.0
+            n_H = norm.n_H if hasattr(norm, 'n_H') else 0.0
+            n_L = norm.n_L if hasattr(norm, 'n_L') else 0.0
             
             alert_active = 1 if is_critical else 0
 

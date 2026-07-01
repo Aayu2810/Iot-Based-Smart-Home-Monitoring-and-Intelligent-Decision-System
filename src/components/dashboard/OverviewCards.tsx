@@ -133,7 +133,7 @@ export function OverviewCards() {
 
       <motion.div variants={cardVariants}>
         <Card label="Gas Level" icon={<Wind className="w-5 h-5" />}>
-          <BigVal v={current.gas_ppm.toFixed(0)} unit="ppm" />
+          <BigVal v={current.gas_ppm.toFixed(1)} unit="ppm" />
           <Bar pct={(current.gas_ppm/1000)*100} color="linear-gradient(90deg,#a78bfa,#8b5cf6)" />
         </Card>
       </motion.div>
@@ -160,7 +160,7 @@ export function OverviewCards() {
       </motion.div>
 
       <motion.div variants={cardVariants}>
-        <Card label="Light Level" icon={<Sun className="w-5 h-5" />}>
+        <Card label="Darkness Level" icon={<Sun className="w-5 h-5" />}>
           <BigVal v={(current.ldr_norm*100).toFixed(0)} unit="%" />
           <Bar pct={current.ldr_norm*100} color="linear-gradient(90deg,#fde047,#eab308)" />
         </Card>

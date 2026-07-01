@@ -1,17 +1,14 @@
-// Smart Home Monitoring System — ESP32 #3 Light & Status Node (LCD display + Single LED)
+// Smart Home Monitoring System — ESP32 #3 Light & Status Node (LDR + single LED)
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
-#include <Wire.h>
-#include <LiquidCrystal_I2C.h>
 
 #include "config.h"
 
 // Global objects
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
-LiquidCrystal_I2C lcd(LCD_I2C_ADDR, LCD_COLUMNS, LCD_ROWS);
 
 // Sensor data structure
 struct LightData {
@@ -26,8 +23,6 @@ bool single_led_state = false;
 // Timing helpers
 unsigned long lastSensorRead = 0;
 unsigned long lastPublish = 0;
-unsigned long lastLcdUpdate = 0;
-const unsigned long LCD_UPDATE_MS = 2000; // update LCD every 2 s
 
 void setupWiFi() {
   Serial.printf("[WiFi] Connecting to %s...\n", WIFI_SSID);
@@ -58,7 +53,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     Serial.printf("[MQTT] JSON parse error: %s\n", err.c_str());
     return;
   }
-  
+
   if (doc.containsKey("led_on")) {
     single_led_state = doc["led_on"];
     digitalWrite(SINGLE_LED_PIN, single_led_state ? HIGH : LOW);
@@ -74,21 +69,15 @@ void setup() {
   pinMode(SINGLE_LED_PIN, OUTPUT);
   digitalWrite(SINGLE_LED_PIN, LOW);
 
-  // Initialise LCD
-  Wire.begin(LCD_SDA_PIN, LCD_SCL_PIN);
-  lcd.init();
-  lcd.backlight();
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print("Smart Home LCD");
-
-  // Wi‑Fi and MQTT setup
+  // Wi-Fi and MQTT setup
   setupWiFi();
   mqttClient.setServer(MQTT_BROKER_IP, MQTT_PORT);
   mqttClient.setCallback(mqttCallback);
 
   // Connect & subscribe
-  while (!mqttClient.connected() && WiFi.status() == WL_CONNECTED) {
+  unsigned long mqttStart = millis();
+  while (!mqttClient.connected() && WiFi.status() == WL_CONNECTED &&
+         (millis() - mqttStart) < 10000) {
     Serial.println("[MQTT] Connecting to broker...");
     if (mqttClient.connect(MQTT_CLIENT_ID)) {
       Serial.println("[MQTT] Connected");
@@ -99,19 +88,18 @@ void setup() {
     }
   }
 
-  Serial.println("[INIT] Light & LCD node ready");
+  Serial.println("[INIT] Light node ready");
 }
 
 void loop() {
   if (WiFi.status() == WL_CONNECTED && !mqttClient.connected()) {
-    // Re‑connect logic
     Serial.println("[MQTT] Reconnecting...");
     if (mqttClient.connect(MQTT_CLIENT_ID)) {
       Serial.println("[MQTT] Reconnected");
       mqttClient.subscribe(TOPIC_ACTUATOR_LED);
     }
   }
-  
+
   if (mqttClient.connected()) {
     mqttClient.loop();
   }
@@ -126,7 +114,7 @@ void loop() {
     lightData.timestamp = now;
   }
 
-  // Publish LDR data at 1 Hz
+  // Publish LDR data at 1 Hz
   if (now - lastPublish >= 1000) {
     lastPublish = now;
     StaticJsonDocument<256> doc;
@@ -136,7 +124,7 @@ void loop() {
     doc["timestamp"] = lightData.timestamp;
     char buff[256];
     serializeJson(doc, buff);
-    
+
     if (mqttClient.connected()) {
       if (mqttClient.publish(TOPIC_LIGHT_SENSORS, buff)) {
         #if DEBUG_LOG
@@ -146,18 +134,6 @@ void loop() {
         Serial.println("[MQTT] Publish failed");
       }
     }
-  }
-
-  // Update LCD display every LCD_UPDATE_MS
-  if (now - lastLcdUpdate >= LCD_UPDATE_MS) {
-    lastLcdUpdate = now;
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("LDR:");
-    lcd.print(lightData.ldr_raw);
-    lcd.setCursor(0, 1);
-    lcd.print("LED:");
-    lcd.print(single_led_state ? "ON " : "OFF");
   }
 
   delay(10);

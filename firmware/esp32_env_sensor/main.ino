@@ -42,8 +42,6 @@
 // --- MQTT Topic Names ---
 #define TOPIC_ENV_SENSORS "home/node/env/sensors"
 #define TOPIC_ENV_NORMALIZED "home/node/env/normalized"
-#define TOPIC_ACTUATOR_BUZZER "home/actuator/buzzer"  // Subscribe for commands
-#define TOPIC_ACTUATOR_LEDS "home/actuator/leds"      // Subscribe for commands
 
 // --- Sensor Calibration Constants ---
 #define TEMP_OFFSET 0.82f      // Calibration delta
@@ -94,7 +92,6 @@ void setupMQTT();
 void readSensors();
 float readMQ2PPM(int adc_raw);
 void publishSensorData();
-void mqttCallback(char* topic, byte* payload, unsigned int length);
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
@@ -162,19 +159,12 @@ void setupWiFi() {
 
 void setupMQTT() {
   mqttClient.setServer(MQTT_BROKER_IP, MQTT_PORT);
-  mqttClient.setCallback(mqttCallback);
   mqttClient.setKeepAlive(60);
 
   while (!mqttClient.connected()) {
     Serial.printf("[MQTT] Connecting to broker at %s:%d...\n", MQTT_BROKER_IP, MQTT_PORT);
-    
     if (mqttClient.connect(MQTT_CLIENT_ID)) {
       Serial.println("[MQTT] Connected to broker");
-      
-      // Subscribe to actuator control topics
-      mqttClient.subscribe(TOPIC_ACTUATOR_BUZZER);
-      mqttClient.subscribe(TOPIC_ACTUATOR_LEDS);
-      Serial.println("[MQTT] Subscribed to actuator control topics");
     } else {
       Serial.printf("[MQTT] Failed, rc=%d. Retrying in 5 seconds...\n", mqttClient.state());
       delay(5000);
@@ -270,20 +260,3 @@ void publishSensorData() {
   }
 }
 
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  // Handle incoming MQTT messages (actuator commands from RPi)
-  Serial.printf("[MQTT] Received message on topic: %s\n", topic);
-  
-  char message[length + 1];
-  memcpy(message, payload, length);
-  message[length] = '\0';
-  
-  Serial.printf("[MQTT] Payload: %s\n", message);
-  
-  // ESP32 #1 doesn't have actuators, but logs commands for debugging
-  if (strcmp(topic, TOPIC_ACTUATOR_BUZZER) == 0) {
-    Serial.println("[MQTT] Buzzer command received (not applicable to this node)");
-  } else if (strcmp(topic, TOPIC_ACTUATOR_LEDS) == 0) {
-    Serial.println("[MQTT] LED command received (not applicable to this node)");
-  }
-}

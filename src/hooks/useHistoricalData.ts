@@ -3,12 +3,15 @@ import { useDashboardStore } from "../store/dashboardStore";
 import { getHistoricalData, getHealth } from "../services/api";
 
 const HEALTH_POLL_MS = 5000;
+const HISTORY_REFRESH_MS = 30_000;
 
 export function useHistoricalData() {
   const { historyRange, setHistory, setIsLoadingHistory, setHealth } =
     useDashboardStore();
 
-  // Re-fetch history whenever the selected range changes
+  // Re-fetch history when the range changes AND every 30 s.
+  // setHistory skips replacing if the server returns empty, preserving live
+  // WebSocket points already appended by useMQTT.
   useEffect(() => {
     let cancelled = false;
 
@@ -25,7 +28,11 @@ export function useHistoricalData() {
     }
 
     fetchHistory();
-    return () => { cancelled = true; };
+    const id = setInterval(fetchHistory, HISTORY_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, [historyRange, setHistory, setIsLoadingHistory]);
 
   // Poll /api/health every 5 s

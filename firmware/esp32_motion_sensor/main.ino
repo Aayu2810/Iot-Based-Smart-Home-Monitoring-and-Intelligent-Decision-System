@@ -32,7 +32,9 @@
 #define TOPIC_AGGREGATE_FSM "home/aggregate/fsm/state"
 
 // --- Sensor Calibration Constants ---
-#define PIR_DEBOUNCE_MS 500
+// HC-SR501 output pulse width is typically 3s+ at minimum pot setting;
+// 2500ms debounce filters electrical noise without masking real detections.
+#define PIR_DEBOUNCE_MS 2500
 
 // --- Diagnostics ---
 #define SERIAL_BAUD 115200
